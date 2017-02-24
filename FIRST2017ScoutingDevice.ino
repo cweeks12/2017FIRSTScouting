@@ -2,29 +2,30 @@
 #include <LiquidCrystal.h>
 
 // These define the timing of the system
-#define TICK_PERIOD 50
+#define TICK_PERIOD 10
 #define AUTO_TIME_IN_SECONDS 5
 #define TELEOP_TIME_IN_SECONDS 15
 #define EXTRA_TIME_TO_INPUT 3 // Necessary for the last second inputs, after the clock expires
 #define AUTO_TICKS AUTO_TIME_IN_SECONDS * 1000 / TICK_PERIOD
 #define TELEOP_TICKS (TELEOP_TIME_IN_SECONDS + EXTRA_TIME_TO_INPUT) * 1000 / TICK_PERIOD
-#define DEBOUNCE_TICKS 2
+#define DEBOUNCE_TICKS 5
+#define LED_TURN_ON_DELAY_TICKS 1
 
 // These can't be #defines because apparently they're redefined somewhere else
-const uint8_t BUTTON_FOUR = 13;
-const uint8_t BUTTON_THREE = 6;
-const uint8_t BUTTON_TWO = 5;
-const uint8_t BUTTON_ONE = 4;
-const uint8_t BUTTON_ZERO = 3;
+#define BLUE_INPUT_BUTTON 3
+#define GREEN_INPUT_BUTTON 13
+#define YELLOW_INPUT_BUTTON 6
+#define RED_INPUT_BUTTON 5
+#define WHITE_INPUT_BUTTON 4
 #define NUMBER_OF_INPUT_BUTTONS 5
 #define GO_BUTTON 0 // Main start button
 
 // LED Pin Locations
-#define LED_ZERO A0
-#define LED_ONE A1
-#define LED_TWO A2
-#define LED_THREE A3
-#define LED_FOUR A4
+#define WHITE_LED A0
+#define RED_LED A1
+#define YELLOW_LED A2
+#define GREEN_LED A3
+#define BLUE_LED A4
 
 #define LCD_RS 7
 #define LCD_ENABLE 8
@@ -47,20 +48,20 @@ LiquidCrystal lcd(LCD_RS, LCD_ENABLE, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 */
 
 // Array that contains all of the buttons for looping through
-uint8_t buttonArray[NUMBER_OF_INPUT_BUTTONS] = {BUTTON_ZERO, BUTTON_ONE, BUTTON_TWO, BUTTON_THREE, BUTTON_FOUR};
+uint8_t buttonArray[NUMBER_OF_INPUT_BUTTONS] = {WHITE_INPUT_BUTTON, RED_INPUT_BUTTON, YELLOW_INPUT_BUTTON, GREEN_INPUT_BUTTON, BLUE_INPUT_BUTTON};
 static bool autonomous = false; // Used to tell if you're in auto
 static bool teleOp = false; // Or tele-op
-static bool SMlocked = true; // Locks the Scoring machine
+static bool SM_locked = true; // Locks the Scoring machine
 static bool DElocked = true; // Locks the data entry machine
 
 // Locks the Scoring Machine
 void SM_lock() {
-  SMlocked = true;
+  SM_locked = true;
 }
 
 // Unlocks the Scoring Machine
 void SM_unlock() {
-  SMlocked = false;
+  SM_locked = false;
 }
 
 // Locks the Data Entry Machine
@@ -81,16 +82,16 @@ enum MM_states {
   MM_teleop, // Tele-operated mode
   MM_transmit, // State to transmit the data
   MM_done // Done and wait for next match
-} MM_currentState; // Current state variable
+} MM_currentState = MM_waitForStart; // Current state variable
 
 // SM is for Scoring Machine
 enum SM_states {
-  SM_init, // Initial state
   SM_waitForButton, // Wait for button to be pushed
   SM_debounceButton, // Debounce the button
   SM_scoreAdd, // Add to the score
+  SM_ledDelay,  // Delays a bit to let the LEDs spin up
   SM_disabled // Locked state to not mess with anything
-} SM_currentState; // Current state variable
+} SM_currentState = SM_disabled; // Current state variable
 
 // DE is for Data Entry
 enum DE_states {
@@ -127,33 +128,242 @@ void lcdTeleOpPrint() {
   lcd.print("Period");
 }
 
+// USER FRIENDLY HELPER FUNCTIONS
+
 // Reads a button
 // They're set up in pull-down orientation, so a reading of LOW is the button pushed
 bool buttonRead(uint8_t buttonNumber) {
   return !digitalRead(buttonNumber);
 }
 
-// Cycles through all the buttons and returns a bit pattern of the button pushes
-uint8_t readAllButtons() {
-  uint8_t result = 0; // Stores the bit pattern
+// Cycles through all the buttons and returns true if any are pressed
+bool readAllButtons() {
   for (uint8_t i = 0; i < NUMBER_OF_INPUT_BUTTONS; i++) {
-    result &= buttonRead(buttonArray[i]) << i;
+    if (buttonRead(buttonArray[i])) { // Short circuits the loop here if any are pushed
+      return true;
+    }
   }
-  // Returns bit pattern like this:
-  // button[XXX43210]. If it's a 1, it's pressed.
-  return result;
+  return false; // If none are, it returns false
 }
 
+// User friendly way to tell an LED to turn on
+void turnOn(uint8_t ledNumber) {
+  digitalWrite(ledNumber, HIGH);
+}
+
+// User friendly way to tell an LED to turn off
+void turnOff(uint8_t ledNumber) {
+  digitalWrite(ledNumber, LOW);
+}
+
+// Turns off BLUE - RED LEDs
+void turnOffTopLeds() {
+  digitalWrite(BLUE_LED, LOW);
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(YELLOW_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+}
+
+// Turns off all LEDs
+void turnOffAllLeds() {
+  turnOffTopLeds();
+  digitalWrite(WHITE_LED, LOW);
+}
+
+// Variables to hold autonomous values
+static uint16_t highGoalAutonomous;
+static uint16_t lowGoalAutonomous;
+static uint8_t gearAutonomous;
+static uint8_t foulAutonomous;
+static bool crossLineAutonomous;
+
+// Variables to hold tele-op values
+static uint16_t highGoalTeleOp;
+static uint16_t lowGoalTeleOp;
+static uint8_t gearTeleOp;
+static uint8_t foulTeleOp;
+static bool climbTeleOp;
+
+// Resets all the scores to zero
+void resetScores() {
+  highGoalAutonomous = 0;
+  lowGoalAutonomous = 0;
+  gearAutonomous = 0;
+  foulAutonomous = 0;
+  crossLineAutonomous = 0;
+  highGoalTeleOp = 0;
+  lowGoalTeleOp = 0;
+  gearTeleOp = 0;
+  foulTeleOp = 0;
+  climbTeleOp = 0;
+}
+
+
 // Helper function to read the buttons and add the appropriate score
-void addToScore(){
-  
+void scoreCalculate() {
+  // All the autonomous scores
+  if (autonomous) {
+    if (buttonRead(BLUE_INPUT_BUTTON)) { // Score in the high goal
+      highGoalAutonomous++;
+      turnOn(BLUE_LED);
+    }
+    if (buttonRead(GREEN_INPUT_BUTTON)) { // Score in the low goal
+      lowGoalAutonomous++;
+      turnOn(GREEN_LED);
+    }
+    if (buttonRead(YELLOW_INPUT_BUTTON)) { // Score a gear
+      gearAutonomous++;
+      turnOn(YELLOW_LED);
+    }
+    if (buttonRead(RED_INPUT_BUTTON)) { // Commit a foul
+      foulAutonomous++;
+      turnOn(RED_LED);
+    }
+    if (buttonRead(WHITE_INPUT_BUTTON)) { // Cross the line for points
+      crossLineAutonomous = !crossLineAutonomous; // Flip the bool
+      digitalWrite(WHITE_LED, crossLineAutonomous); // And make the LED show the status
+    }
+  }
+
+  // All the Tele-Op scores
+  // Pretty much the same thing, just different variables
+  else if (teleOp) {
+    if (buttonRead(BLUE_INPUT_BUTTON)) { // Score in the high goal
+      highGoalTeleOp++;
+      turnOn(BLUE_LED);
+    }
+    if (buttonRead(GREEN_INPUT_BUTTON)) { // Score in the low goal
+      lowGoalTeleOp++;
+      turnOn(GREEN_LED);
+    }
+    if (buttonRead(YELLOW_INPUT_BUTTON)) { // Score a gear
+      gearTeleOp++;
+      turnOn(YELLOW_LED);
+    }
+    if (buttonRead(RED_INPUT_BUTTON)) { // Commit a foul
+      foulTeleOp++;
+      turnOn(RED_LED);
+    }
+    if (buttonRead(WHITE_INPUT_BUTTON)) { // Cross the line for points
+      climbTeleOp = !climbTeleOp; // Flip the boolean
+      digitalWrite(WHITE_LED, climbTeleOp);
+    }
+  }
+  return;
+}
+
+// Score Machine Debug
+// Prints to the serial monitor which state you're in whenever you change states
+void SM_debug() {
+  static SM_states SM_previousState = SM_disabled;
+  if (SM_currentState != SM_previousState) {
+    switch (SM_currentState) {
+      case SM_waitForButton: // Wait for button to be pushed
+        Serial.println("SM_waitForButton");
+        break;
+      case SM_debounceButton: // Debounce the button
+        Serial.println("SM_debounceButton");
+        break;
+      case SM_scoreAdd: // Add to the score
+        Serial.println("SM_scoreAdd");
+        break;
+      case SM_ledDelay: // Delay for the LEDs
+        Serial.println("SM_ledDelay");
+        break;
+      case SM_disabled: // Locked state to not mess with anything
+        Serial.println("SM_disabled");
+        break;
+    }
+    SM_previousState = SM_currentState;
+  }
+}
+
+// Standard Tick Function for the Scoring Machine
+void SM_tick() {
+
+  SM_debug();
+  // --------- Variables ----------
+  static uint32_t ticksToNextState = 0;
+
+  // ---------- STATE ACTIONS -------
+  switch (SM_currentState) {
+    case SM_waitForButton: // Wait for button to be pushed
+      break;
+    case SM_debounceButton: // Debounce the button
+      ticksToNextState++;
+      break;
+    case SM_scoreAdd: // Add to the score
+      break;
+    case SM_ledDelay:
+      ticksToNextState++;
+      break;
+    case SM_disabled: // Locked state to not mess with anything
+      break;
+    default:
+      break;
+  }
+
+  // -------- TRANSITIONS ---------
+  switch (SM_currentState) {
+    case SM_waitForButton: // Wait for button to be pushed
+      if (readAllButtons()) { // If any button is pressed
+        SM_currentState = SM_debounceButton; // Debounce it
+        ticksToNextState = 0;
+      }
+      else if (SM_locked) { // If it gets locked
+        SM_currentState = SM_disabled; // You're disabled
+        turnOffAllLeds();
+        ticksToNextState = 0;
+      }
+      break;
+    case SM_debounceButton: // Debounce the button
+      if (ticksToNextState == DEBOUNCE_TICKS && readAllButtons()) { // If you're ready to move on and the button is still being pushed
+        SM_currentState = SM_scoreAdd; // Move to the score adding state
+        ticksToNextState = 0; // Reset the counter
+        scoreCalculate(); // Run the add to score function to read and add to score
+      }
+      else if (!readAllButtons()) { // If the button is released before you're done
+        ticksToNextState = 0;
+        SM_currentState = SM_waitForButton; // Go back to waiting for a button press
+      }
+      break;
+    case SM_scoreAdd: // Add to the score
+      if (!readAllButtons()) { // Wait for all the buttons to be released
+        SM_currentState = SM_ledDelay; // And go back to waiting
+        ticksToNextState = 0;
+      }
+      else if (SM_locked) { // Lock
+        SM_currentState = SM_disabled;
+        turnOffAllLeds();
+        ticksToNextState = 0;
+      }
+      break;
+    case SM_ledDelay: // Delay for LEDs to be visible
+      if (ticksToNextState == LED_TURN_ON_DELAY_TICKS) {
+        turnOffTopLeds(); // Turn off the LEDs
+        ticksToNextState = 0;
+        SM_currentState = SM_waitForButton; // Go back to waiting
+      }
+      break;
+    case SM_disabled: // Locked state to not mess with anything
+      if (!SM_locked) { // If you're unlocked
+        SM_currentState = SM_waitForButton; // Go to start state
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+// Data entry tick function
+void DE_tick() {
+
 }
 
 // Tick function for the Master Machine
 void MM_tick() {
   // ------------ VARIABLES --------------
   static uint32_t ticksToNextState = 0;
-  static MM_states MM_currentState = MM_waitForStart;
 
   // ------------ TRANSITIONS ------------
   switch (MM_currentState) {
@@ -183,6 +393,7 @@ void MM_tick() {
         teleOp = true; // And into teleop
         lcdTeleOpPrint(); // Write to the screen
         ticksToNextState = 0; // Reset counter
+        turnOffAllLeds();
       }
       break;
 
@@ -210,92 +421,28 @@ void MM_tick() {
       }
       break;
     case MM_done:
-      MM_currentState = MM_waitForStart;
+      if (!buttonRead(GO_BUTTON)) {
+        MM_currentState = MM_waitForStart;
+      }
       break;
 
     default:
       break;
   }
-
-}
-
-void SM_tick() {
-  // --------- Variables ----------
-  static uint32_t ticksToNextState = 0;
-
-  // ---------- STATE ACTIONS -------
-  switch (SM_currentState) {
-    case SM_waitForButton: // Wait for button to be pushed
-      break;
-    case SM_debounceButton: // Debounce the button
-      ticksToNextState++;
-      break;
-    case SM_scoreAdd: // Add to the score
-      break;
-    case SM_disabled: // Locked state to not mess with anything
-      break;
-    default:
-      break;
-  }
-
-  // -------- TRANSITIONS ---------
-  switch (SM_currentState) {
-    case SM_waitForButton: // Wait for button to be pushed
-      if (readAllButtons()) {
-        SM_currentState = SM_debounceButton;
-        ticksToNextState = 0;
-      }
-      else if (SMlocked) {
-        SM_currentState = SM_disabled;
-        ticksToNextState = 0;
-      }
-      break;
-    case SM_debounceButton: // Debounce the button
-      if (ticksToNextState == DEBOUNCE_TICKS) { // If you're ready to move on
-        SM_currentState = SM_scoreAdd; // Move to the score adding state
-        ticksToNextState = 0; // Reset the counter
-        addToScore(); // Run the add to score function to read and add to score
-      }
-      else if (SMlocked) {
-        SM_currentState = SM_disabled;
-        ticksToNextState = 0;
-      }
-      break;
-    case SM_scoreAdd: // Add to the score
-      if (!readAllButtons()) {
-        SM_currentState = SM_waitForButton;
-      }
-      else if (SMlocked) {
-        SM_currentState = SM_disabled;
-        ticksToNextState = 0;
-      }
-      break;
-    case SM_disabled: // Locked state to not mess with anything
-      if (!SMlocked) { // If you're unlocked
-        SM_currentState = SM_waitForButton; // Go to start state
-      }
-      break;
-    default:
-      break;
-  }
-}
-
-void DE_tick(){
-  
 }
 
 void setup() {
   // put your setup code here, to run once:
-  pinMode(BUTTON_FOUR, INPUT_PULLUP);
-  pinMode(BUTTON_THREE, INPUT_PULLUP);
-  pinMode(BUTTON_TWO, INPUT_PULLUP);
-  pinMode(BUTTON_ONE, INPUT_PULLUP);
-  pinMode(BUTTON_ZERO, INPUT_PULLUP);
-  pinMode(LED_FOUR, OUTPUT);
-  pinMode(LED_THREE, OUTPUT);
-  pinMode(LED_TWO, OUTPUT);
-  pinMode(LED_ONE, OUTPUT);
-  pinMode(LED_ZERO, OUTPUT);
+  pinMode(BLUE_INPUT_BUTTON, INPUT_PULLUP);
+  pinMode(GREEN_INPUT_BUTTON, INPUT_PULLUP);
+  pinMode(YELLOW_INPUT_BUTTON, INPUT_PULLUP);
+  pinMode(RED_INPUT_BUTTON, INPUT_PULLUP);
+  pinMode(WHITE_INPUT_BUTTON, INPUT_PULLUP);
+  pinMode(BLUE_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(YELLOW_LED, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(WHITE_LED, OUTPUT);
 
   lcd.begin(16, 2);
   lcd.print("Waiting to begin");
@@ -307,15 +454,5 @@ void loop() {
   MM_tick();
   SM_tick();
   DE_tick();
-  uint8_t three = buttonRead(BUTTON_TWO);
-  digitalWrite(LED_TWO, three);
-  uint8_t four = buttonRead(BUTTON_THREE);
-  digitalWrite(LED_THREE, four);
-  uint8_t two = buttonRead(BUTTON_ONE);
-  digitalWrite(LED_ONE, two);
-  uint8_t one = buttonRead(BUTTON_ZERO);
-  digitalWrite(LED_ZERO, one);
-  uint8_t five = buttonRead(BUTTON_FOUR);
-  digitalWrite(LED_FOUR, five);
   delay(TICK_PERIOD);
 }
