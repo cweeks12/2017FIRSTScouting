@@ -3,15 +3,16 @@
 
 // These define the timing of the system
 #define TICK_PERIOD 10
-#define AUTO_TIME_IN_SECONDS 5
-#define TELEOP_TIME_IN_SECONDS 15
-#define EXTRA_TIME_TO_INPUT 3 // Necessary for the last second inputs, after the clock expires
+#define AUTO_TIME_IN_SECONDS 3
+#define TELEOP_TIME_IN_SECONDS 4
+#define EXTRA_TIME_TO_INPUT 1 // Necessary for the last second inputs, after the clock expires
 #define AUTO_TICKS AUTO_TIME_IN_SECONDS * 1000 / TICK_PERIOD
 #define TELEOP_TICKS (TELEOP_TIME_IN_SECONDS + EXTRA_TIME_TO_INPUT) * 1000 / TICK_PERIOD
 #define DEBOUNCE_TICKS 5
 #define LED_TURN_ON_DELAY_TICKS 1
+#define LENGTH_OF_LCD_STRING 25
+#define LENGTH_OF_SERIAL_STRING 50
 
-// These can't be #defines because apparently they're redefined somewhere else
 #define BLUE_INPUT_BUTTON 3
 #define GREEN_INPUT_BUTTON 13
 #define YELLOW_INPUT_BUTTON 6
@@ -27,6 +28,7 @@
 #define GREEN_LED A3
 #define BLUE_LED A4
 
+// Define where the LCD pins are
 #define LCD_RS 7
 #define LCD_ENABLE 8
 #define LCD_D4 9
@@ -52,7 +54,7 @@ uint8_t buttonArray[NUMBER_OF_INPUT_BUTTONS] = {WHITE_INPUT_BUTTON, RED_INPUT_BU
 static bool autonomous = false; // Used to tell if you're in auto
 static bool teleOp = false; // Or tele-op
 static bool SM_locked = true; // Locks the Scoring machine
-static bool DElocked = true; // Locks the data entry machine
+static bool DE_locked = true; // Locks the data entry machine
 
 // Locks the Scoring Machine
 void SM_lock() {
@@ -66,12 +68,12 @@ void SM_unlock() {
 
 // Locks the Data Entry Machine
 void DE_lock() {
-  DElocked = true;
+  DE_locked = true;
 }
 
 // Unlocks the Data Entry Machine
 void DE_unlock() {
-  DElocked = false;
+  DE_locked = false;
 }
 
 // MM is for Master Machine
@@ -170,6 +172,11 @@ void turnOffAllLeds() {
   digitalWrite(WHITE_LED, LOW);
 }
 
+// Strings to display and give to the serial handler
+char displayLineOne[LENGTH_OF_LCD_STRING] = {0}; // Strings to keep the output for
+char displayLineTwo[LENGTH_OF_LCD_STRING] = {0};
+char serialOut[LENGTH_OF_SERIAL_STRING] = {0}; // String to hold the serial values to push to computer
+
 // Variables to hold autonomous values
 static uint16_t highGoalAutonomous;
 static uint16_t lowGoalAutonomous;
@@ -252,6 +259,23 @@ void scoreCalculate() {
   return;
 }
 
+void generateStringToOutput() {
+  // Generates the serial output
+  sprintf(serialOut, "%d\t%d\t%d\t%d\t%s\t%d\t%d\t%d\t%d\t%s",   highGoalAutonomous,
+          lowGoalAutonomous,
+          gearAutonomous,
+          foulAutonomous,
+          crossLineAutonomous ? "Y" : "N",
+          highGoalTeleOp,
+          lowGoalTeleOp,
+          gearTeleOp,
+          foulTeleOp,
+          climbTeleOp ? "Y" : "N");
+
+  sprintf(displayLineOne, "A %dH %dL %dG L:%s", highGoalAutonomous, lowGoalAutonomous, gearAutonomous, crossLineAutonomous ? "Y" : "N");
+  sprintf(displayLineTwo, "T %dH %dL %dG C:%s", highGoalTeleOp, lowGoalTeleOp, gearTeleOp, climbTeleOp ? "Y" : "N");
+}
+
 // Score Machine Debug
 // Prints to the serial monitor which state you're in whenever you change states
 void SM_debug() {
@@ -281,7 +305,7 @@ void SM_debug() {
 // Standard Tick Function for the Scoring Machine
 void SM_tick() {
 
-  SM_debug();
+  //SM_debug();
   // --------- Variables ----------
   static uint32_t ticksToNextState = 0;
 
@@ -360,8 +384,40 @@ void DE_tick() {
 
 }
 
+void MM_debug() {
+  static MM_states MM_previousState = MM_done;
+  if (MM_currentState != MM_previousState) {
+    switch (MM_currentState) {
+      case MM_waitForStart:
+        Serial.println("MM_waitForStart");
+        break;
+      case MM_dataInput:
+        Serial.println("MM_dataInput");
+        break;
+      case MM_auto:
+        Serial.println("MM_auto");
+        break;
+      case MM_teleop:
+        Serial.println("MM_teleop");
+        break;
+      case MM_transmit:
+        Serial.println("MM_transmit");
+        break;
+      case MM_done:
+        Serial.println("MM_done");
+        break;
+      default:
+        break;
+
+    }
+    MM_previousState = MM_currentState;
+  }
+}
+
 // Tick function for the Master Machine
 void MM_tick() {
+
+  //MM_debug();
   // ------------ VARIABLES --------------
   static uint32_t ticksToNextState = 0;
 
@@ -403,26 +459,38 @@ void MM_tick() {
       }
       else if (ticksToNextState == TELEOP_TICKS) { // If it is time to be done
         teleOp = false; // Not in teleOp
-        MM_currentState = MM_transmit; // Move to transmit
+
         lcdErase(); // erase the screen
-        lcd.setCursor(2, 0);
-        lcd.print("Match over!"); // And print Match Over!
+        //        lcd.setCursor(2, 0);
+        //        lcd.print("Match over!"); // And print Match Over!
+
         ticksToNextState = 0; // Reset the counter
         SM_lock(); // Lock the Scoring Machine
+        generateStringToOutput();
+        turnOffAllLeds();
+        lcd.setCursor(0, 0);
+        lcd.print(displayLineOne);
+        lcd.setCursor(0, 1);
+        lcd.print(displayLineTwo);
+        MM_currentState = MM_transmit; // Move to transmit
       }
       break;
 
     case MM_transmit:
-      if (/*transmit()*/buttonRead(GO_BUTTON)) {
-        MM_currentState = MM_waitForStart;
+      if (buttonRead(GO_BUTTON)) {
+        MM_currentState = MM_done;
         lcdErase();
-        lcd.setCursor(0, 0);
-        lcd.print("Waiting to begin");
+      }
+      if (Serial.available() > 0 && Serial.read() == 'Y') {
+        Serial.println(serialOut);
       }
       break;
     case MM_done:
       if (!buttonRead(GO_BUTTON)) {
         MM_currentState = MM_waitForStart;
+        resetScores();
+        lcd.setCursor(0, 0);
+        lcd.print("Waiting to begin");
       }
       break;
 
@@ -444,15 +512,21 @@ void setup() {
   pinMode(RED_LED, OUTPUT);
   pinMode(WHITE_LED, OUTPUT);
 
+
   lcd.begin(16, 2);
   lcd.print("Waiting to begin");
   Serial.begin(9600);
+  Serial.println("Setup");
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  MM_tick();
-  SM_tick();
-  DE_tick();
-  delay(TICK_PERIOD);
+
+  static uint32_t previousMillis = 0;
+
+  if (millis() >= previousMillis + TICK_PERIOD) {
+    previousMillis = millis();
+    MM_tick();
+    SM_tick();
+    DE_tick();
+  }
 }
