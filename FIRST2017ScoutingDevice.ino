@@ -2,22 +2,22 @@
 #include <LiquidCrystal.h>
 
 // These define the timing of the system
-#define TICK_PERIOD 10
+#define TICK_PERIOD 20
 #define AUTO_TIME_IN_SECONDS 3
 #define TELEOP_TIME_IN_SECONDS 4
 #define EXTRA_TIME_TO_INPUT 1 // Necessary for the last second inputs, after the clock expires
 #define AUTO_TICKS AUTO_TIME_IN_SECONDS * 1000 / TICK_PERIOD
 #define TELEOP_TICKS (TELEOP_TIME_IN_SECONDS + EXTRA_TIME_TO_INPUT) * 1000 / TICK_PERIOD
-#define DEBOUNCE_TICKS 5
+#define DEBOUNCE_TICKS 2
 #define LED_TURN_ON_DELAY_TICKS 1
 #define LENGTH_OF_LCD_STRING 25
 #define LENGTH_OF_SERIAL_STRING 50
 
-#define BLUE_INPUT_BUTTON 3
-#define GREEN_INPUT_BUTTON 13
-#define YELLOW_INPUT_BUTTON 6
-#define RED_INPUT_BUTTON 5
-#define WHITE_INPUT_BUTTON 4
+#define BLUE_INPUT_BUTTON 6
+#define GREEN_INPUT_BUTTON 5
+#define YELLOW_INPUT_BUTTON 4
+#define RED_INPUT_BUTTON 3
+#define WHITE_INPUT_BUTTON 2
 #define NUMBER_OF_INPUT_BUTTONS 5
 #define GO_BUTTON 0 // Main start button
 
@@ -97,7 +97,6 @@ enum SM_states {
 
 // DE is for Data Entry
 enum DE_states {
-  DE_init,
   DE_teamNumberEntry, // State to enter team number
   DE_allianceEntry, // Choose red or blue
   DE_stationEntry, // Station 1, 2, or 3
@@ -276,6 +275,53 @@ void generateStringToOutput() {
   sprintf(displayLineTwo, "T %dH %dL %dG C:%s", highGoalTeleOp, lowGoalTeleOp, gearTeleOp, climbTeleOp ? "Y" : "N");
 }
 
+void DE_debug(){
+   switch (DE_currentState) {
+    case DE_teamNumberEntry:
+      break;
+    case DE_allianceEntry:
+      break;
+    case DE_stationEntry:
+      break;
+    case DE_disabled:
+      break;
+    default:
+      break;
+  }
+}
+
+// Data entry machine
+void DE_tick() {
+
+  // ------ TRANSITIONS -------
+  switch (DE_currentState) {
+    case DE_teamNumberEntry:
+      break;
+    case DE_allianceEntry:
+      break;
+    case DE_stationEntry:
+      break;
+    case DE_disabled:
+      break;
+    default:
+      break;
+  }
+
+  // ------- STATE ACTIONS -------
+   switch (DE_currentState) {
+    case DE_teamNumberEntry:
+      break;
+    case DE_allianceEntry:
+      break;
+    case DE_stationEntry:
+      break;
+    case DE_disabled:
+      break;
+    default:
+      break;
+  }
+}
+
 // Score Machine Debug
 // Prints to the serial monitor which state you're in whenever you change states
 void SM_debug() {
@@ -377,11 +423,6 @@ void SM_tick() {
     default:
       break;
   }
-}
-
-// Data entry tick function
-void DE_tick() {
-
 }
 
 void MM_debug() {
@@ -500,7 +541,7 @@ void MM_tick() {
 }
 
 void setup() {
-  // put your setup code here, to run once:
+
   pinMode(BLUE_INPUT_BUTTON, INPUT_PULLUP);
   pinMode(GREEN_INPUT_BUTTON, INPUT_PULLUP);
   pinMode(YELLOW_INPUT_BUTTON, INPUT_PULLUP);
@@ -512,17 +553,17 @@ void setup() {
   pinMode(RED_LED, OUTPUT);
   pinMode(WHITE_LED, OUTPUT);
 
-
   lcd.begin(16, 2);
   lcd.print("Waiting to begin");
   Serial.begin(9600);
-  Serial.println("Setup");
 }
 
+// Main loop
 void loop() {
-
+  // Variable containing the previous amount of
   static uint32_t previousMillis = 0;
 
+  // Checks to see if enough milliseconds have passed
   if (millis() >= previousMillis + TICK_PERIOD) {
     previousMillis = millis();
     MM_tick();
